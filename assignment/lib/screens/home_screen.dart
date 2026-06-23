@@ -677,10 +677,18 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
       setState(() => _error = 'Tên task phải có ít nhất 2 ký tự!');
       return;
     }
+
+    // Nếu không chọn ngày lên lịch, mặc định là ngày hôm nay
+    DateTime? finalScheduledDate = _scheduledDate;
+    if (finalScheduledDate == null) {
+      final now = DateTime.now();
+      finalScheduledDate = DateTime(now.year, now.month, now.day);
+    }
+
     Navigator.of(context).pop(
       TaskFormResult(
         title: val,
-        scheduledDate: _scheduledDate,
+        scheduledDate: finalScheduledDate,
         dueDate: _dueDate,
         estimatedMinutes: _estimatedMinutes,
         priority: _priority,
