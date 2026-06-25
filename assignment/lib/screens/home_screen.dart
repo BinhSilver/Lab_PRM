@@ -750,7 +750,6 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
       return;
     }
 
-<<<<<<< HEAD
     // Giải thích (Tự động thiết lập ngày mặc định):
     // Lấy ngày giờ hiện tại nhưng ép bỏ phần Giờ/Phút/Giây (chỉ giữ Ngày/Tháng/Năm)
     final now = DateTime.now();
@@ -761,25 +760,12 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
     // thì hệ thống tự động lấy giá trị mặc định là biến 'today' (ngày hôm nay).
     final effectiveScheduledDate = _scheduledDate ?? today;
     final effectiveDueDate = _dueDate ?? today;
-=======
-    // Nếu không chọn ngày lên lịch, mặc định là ngày hôm nay
-    DateTime? finalScheduledDate = _scheduledDate;
-    if (finalScheduledDate == null) {
-      final now = DateTime.now();
-      finalScheduledDate = DateTime(now.year, now.month, now.day);
-    }
->>>>>>> 8701b8555e57ddc0d2a1e81964aa88b67544af26
 
     Navigator.of(context).pop(
       TaskFormResult(
         title: val,
-<<<<<<< HEAD
         scheduledDate: effectiveScheduledDate,
         dueDate: effectiveDueDate,
-=======
-        scheduledDate: finalScheduledDate,
-        dueDate: _dueDate,
->>>>>>> 8701b8555e57ddc0d2a1e81964aa88b67544af26
         estimatedMinutes: _estimatedMinutes,
         priority: _priority,
       ),
