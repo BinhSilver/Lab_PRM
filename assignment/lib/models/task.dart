@@ -83,8 +83,8 @@ extension SortModeExt on SortMode {
 // ── Form result (returned from bottom sheet) ────────────
 class TaskFormResult {
   final String title;
-  final DateTime? scheduledDate; // ngày dự định làm
-  final DateTime? dueDate;       // ngày hết hạn (deadline)
+  final DateTime? scheduledDate;
+  final DateTime? dueDate;
   final int? estimatedMinutes;
   final TaskPriority priority;
 
@@ -99,17 +99,17 @@ class TaskFormResult {
 
 // ── Task model ──────────────────────────────────────────
 class Task {
-  final String id;
+  int? id;           // SQLite primary key (null = not yet inserted)
   String title;
   bool isCompleted;
   final DateTime createdAt;
-  DateTime? scheduledDate; // ngày dự định thực hiện
-  DateTime? dueDate;       // deadline (phải >= scheduledDate)
+  DateTime? scheduledDate;
+  DateTime? dueDate;
   int? estimatedMinutes;
   TaskPriority priority;
 
   Task({
-    required this.id,
+    this.id,
     required this.title,
     this.isCompleted = false,
     required this.createdAt,
@@ -141,5 +141,40 @@ class Task {
     final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     final t = DateTime(target.year, target.month, target.day);
     return t.difference(today).inDays;
+  }
+
+  // ── SQLite serialization ────────────────────────────
+
+  /// Convert Task to a Map for SQLite insertion/update.
+  Map<String, dynamic> toMap() {
+    return {
+      // 'id' is omitted on insert (AUTOINCREMENT), included on update
+      if (id != null) 'id': id,
+      'title': title,
+      'isCompleted': isCompleted ? 1 : 0,
+      'createdAt': createdAt.toIso8601String(),
+      'scheduledDate': scheduledDate?.toIso8601String(),
+      'dueDate': dueDate?.toIso8601String(),
+      'estimatedMinutes': estimatedMinutes,
+      'priority': priority.index,
+    };
+  }
+
+  /// Construct a Task from a SQLite row Map.
+  factory Task.fromMap(Map<String, dynamic> map) {
+    return Task(
+      id: map['id'] as int?,
+      title: map['title'] as String,
+      isCompleted: (map['isCompleted'] as int) == 1,
+      createdAt: DateTime.parse(map['createdAt'] as String),
+      scheduledDate: map['scheduledDate'] != null
+          ? DateTime.parse(map['scheduledDate'] as String)
+          : null,
+      dueDate: map['dueDate'] != null
+          ? DateTime.parse(map['dueDate'] as String)
+          : null,
+      estimatedMinutes: map['estimatedMinutes'] as int?,
+      priority: TaskPriority.values[map['priority'] as int? ?? 1],
+    );
   }
 }

@@ -55,7 +55,7 @@ class FilterBar extends StatelessWidget {
                   boxShadow: isSelected
                       ? [
                           BoxShadow(
-                            color: activeColor.withOpacity(0.3),
+                             color: activeColor.withValues(alpha: 0.3),
                             blurRadius: 8,
                             offset: const Offset(0, 3),
                           )

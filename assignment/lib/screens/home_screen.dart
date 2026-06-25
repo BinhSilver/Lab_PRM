@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../database/database_helper.dart';
 import '../models/task.dart';
 import '../utils/date_formatter.dart';
 import '../widgets/dashboard_card.dart';
 import '../widgets/filter_bar.dart';
 import '../widgets/task_item.dart';
 import '../widgets/empty_state.dart';
+import 'login_screen.dart';
 
 // ═══════════════════════════════════════════════════════
 // HOME SCREEN
@@ -19,20 +22,21 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   // ── State ──────────────────────────────────────
   final List<Task> _tasks = [];
+  bool _isLoading = true;
+  int _userId = 0;              // userId cua user dang dang nhap
   String _filterType = 'All'; // All | Incomplete | Completed | Overdue
   SortMode _sortMode = SortMode.newestFirst;
   DateTime? _selectedDate; // date-strip filter (null = show all)
 
+  final _db = DatabaseHelper.instance;
+
   // ── Computed ───────────────────────────────────
-  int get _completedCount => _tasks.where((t) => t.isCompleted).length;
   int get _overdueCount => _tasks.where((t) => t.isOverdue).length;
 
   bool _isThisWeek(DateTime date) {
     final now = DateTime.now();
-    // Ngày đầu tuần (Thứ 2)
     final weekStart = DateTime(now.year, now.month, now.day)
         .subtract(Duration(days: now.weekday - 1));
-    // Cuối tuần (Chủ nhật 23:59:59)
     final weekEnd = weekStart.add(const Duration(
         days: 6, hours: 23, minutes: 59, seconds: 59));
     return date.isAfter(weekStart.subtract(const Duration(seconds: 1))) &&
@@ -86,17 +90,15 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
     }
 
-    // Date-strip filter: only tasks whose scheduledDate OR dueDate matches
+    // Date-strip filter
     if (_selectedDate != null) {
       final d = _selectedDate!;
       result = result.where((t) {
-        bool ms =
-            t.scheduledDate != null &&
+        bool ms = t.scheduledDate != null &&
             t.scheduledDate!.year == d.year &&
             t.scheduledDate!.month == d.month &&
             t.scheduledDate!.day == d.day;
-        bool md =
-            t.dueDate != null &&
+        bool md = t.dueDate != null &&
             t.dueDate!.year == d.year &&
             t.dueDate!.month == d.month &&
             t.dueDate!.day == d.day;
@@ -105,6 +107,123 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return result;
+  }
+
+  // ── Lifecycle ──────────────────────────────────
+  @override
+  void initState() {
+    super.initState();
+    _loadTasksFromDb();
+  }
+
+  // ── DB Operations ──────────────────────────────
+  Future<void> _loadTasksFromDb() async {
+    setState(() => _isLoading = true);
+    try {
+      // Giải thích (Multi-user):
+      // 1. Đọc userId của người dùng hiện tại đang đăng nhập từ SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      _userId = prefs.getInt('userId') ?? 0;
+
+      // 2. Truyền userId vào hàm getTasks() để database chỉ trả về
+      // danh sách task của riêng người này.
+      final tasks = await _db.getTasks(_userId);
+      if (mounted) {
+        setState(() {
+          _tasks.clear();
+          _tasks.addAll(tasks);
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _addTask(TaskFormResult r) async {
+    final newTask = Task(
+      title: r.title,
+      createdAt: DateTime.now(),
+      scheduledDate: r.scheduledDate,
+      dueDate: r.dueDate,
+      estimatedMinutes: r.estimatedMinutes,
+      priority: r.priority,
+    );
+    final insertedId = await _db.insertTask(newTask, _userId);
+    newTask.id = insertedId;
+    setState(() => _tasks.insert(0, newTask));
+    _showSnackBar('✅ Task đã được thêm thành công!');
+  }
+
+  Future<void> _editTask(Task task, TaskFormResult r) async {
+    task.title = r.title;
+    task.scheduledDate = r.scheduledDate;
+    task.dueDate = r.dueDate;
+    task.estimatedMinutes = r.estimatedMinutes;
+    task.priority = r.priority;
+    await _db.updateTask(task);
+    setState(() {});
+    _showSnackBar('✏️ Task đã được cập nhật!');
+  }
+
+  Future<void> _toggleTaskStatus(Task task) async {
+    task.isCompleted = !task.isCompleted;
+    if (task.id != null) {
+      await _db.updateTaskStatus(task.id!, task.isCompleted);
+    }
+    setState(() {});
+  }
+
+  Future<void> _deleteTask(Task task) async {
+    if (task.id != null) {
+      await _db.deleteTask(task.id!);
+    }
+    setState(() => _tasks.remove(task));
+    _showSnackBar('🗑️ Đã xóa task "${task.title}"');
+  }
+
+  // ── Logout ─────────────────────────────────────
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.logout_rounded, color: Color(0xFF5C6BC0), size: 26),
+            SizedBox(width: 8),
+            Text('Đăng xuất'),
+          ],
+        ),
+        content: const Text('Bạn có chắc muốn đăng xuất không?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF5C6BC0),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Đăng xuất'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('isLoggedIn');
+    await prefs.remove('userEmail');
+
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
   }
 
   // ── SnackBar ───────────────────────────────────
@@ -124,60 +243,14 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(child: Text(message)),
           ],
         ),
-        backgroundColor: isError
-            ? Colors.red.shade600
-            : const Color(0xFF3949AB),
+        backgroundColor:
+            isError ? Colors.red.shade600 : const Color(0xFF3949AB),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         duration: const Duration(seconds: 2),
       ),
     );
-  }
-
-  // ── CRUD ───────────────────────────────────────
-  void _addTask(TaskFormResult r) {
-    setState(() {
-      _tasks.insert(
-        0,
-        Task(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          title: r.title,
-          createdAt: DateTime.now(),
-          scheduledDate: r.scheduledDate,
-          dueDate: r.dueDate,
-          estimatedMinutes: r.estimatedMinutes,
-          priority: r.priority,
-        ),
-      );
-    });
-    _showSnackBar('✅ Task đã được thêm thành công!');
-  }
-
-  void _editTask(Task task, TaskFormResult r) {
-    setState(() {
-      final idx = _tasks.indexWhere((t) => t.id == task.id);
-      if (idx != -1) {
-        _tasks[idx].title = r.title;
-        _tasks[idx].scheduledDate = r.scheduledDate;
-        _tasks[idx].dueDate = r.dueDate;
-        _tasks[idx].estimatedMinutes = r.estimatedMinutes;
-        _tasks[idx].priority = r.priority;
-      }
-    });
-    _showSnackBar('✏️ Task đã được cập nhật!');
-  }
-
-  void _toggleTaskStatus(String id) {
-    setState(() {
-      final idx = _tasks.indexWhere((t) => t.id == id);
-      if (idx != -1) _tasks[idx].isCompleted = !_tasks[idx].isCompleted;
-    });
-  }
-
-  void _deleteTask(String id, String title) {
-    setState(() => _tasks.removeWhere((t) => t.id == id));
-    _showSnackBar('🗑️ Đã xóa task "$title"');
   }
 
   // ── Bottom Sheet ───────────────────────────────
@@ -225,15 +298,14 @@ class _HomeScreenState extends State<HomeScreen> {
             style: FilledButton.styleFrom(
               backgroundColor: Colors.red.shade500,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
+                  borderRadius: BorderRadius.circular(10)),
             ),
             child: const Text('Xóa'),
           ),
         ],
       ),
     ).then((confirmed) {
-      if (confirmed == true) _deleteTask(task.id, task.title);
+      if (confirmed == true) _deleteTask(task);
     });
   }
 
@@ -260,9 +332,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Icon(
                 mode.icon,
                 size: 18,
-                color: selected
-                    ? const Color(0xFF5C6BC0)
-                    : Colors.grey.shade600,
+                color: selected ? const Color(0xFF5C6BC0) : Colors.grey.shade600,
               ),
               const SizedBox(width: 10),
               Text(
@@ -274,11 +344,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               if (selected) ...[
                 const Spacer(),
-                const Icon(
-                  Icons.check_rounded,
-                  size: 16,
-                  color: Color(0xFF5C6BC0),
-                ),
+                const Icon(Icons.check_rounded,
+                    size: 16, color: Color(0xFF5C6BC0)),
               ],
             ],
           ),
@@ -289,31 +356,23 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result != null) setState(() => _sortMode = result);
   }
 
-  // ── Date Strip ──────────────────────────────
-  // · "Tất cả" chip → clear date filter
-  // · 7 date chips (Monday to Sunday of the current week)
-  // · Task count indicator when tasks exist on that day
+  // ── Date Strip ─────────────────────────────────
   Widget _buildDateStrip() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final baseDate = _selectedDate ?? now;
     final centerDate = DateTime(baseDate.year, baseDate.month, baseDate.day);
-    
-    // Lấy ngày đầu tuần (Thứ 2) của ngày được chọn
-    final weekStart = centerDate.subtract(Duration(days: centerDate.weekday - 1));
-    // Tạo danh sách 7 ngày của tuần
+    final weekStart =
+        centerDate.subtract(Duration(days: centerDate.weekday - 1));
     final dates = List.generate(7, (i) => weekStart.add(Duration(days: i)));
 
-    // Count tasks on a specific date
-    int _taskCountFor(DateTime d) {
+    int taskCountFor(DateTime d) {
       return _tasks.where((t) {
-        bool ms =
-            t.scheduledDate != null &&
+        bool ms = t.scheduledDate != null &&
             t.scheduledDate!.year == d.year &&
             t.scheduledDate!.month == d.month &&
             t.scheduledDate!.day == d.day;
-        bool md =
-            t.dueDate != null &&
+        bool md = t.dueDate != null &&
             t.dueDate!.year == d.year &&
             t.dueDate!.month == d.month &&
             t.dueDate!.day == d.day;
@@ -321,7 +380,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }).length;
     }
 
-    bool _isSameDay(DateTime a, DateTime b) =>
+    bool isSameDay(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day;
 
     return SizedBox(
@@ -329,9 +388,8 @@ class _HomeScreenState extends State<HomeScreen> {
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        itemCount: dates.length + 1, // +1 for “Chọn tuần” chip
+        itemCount: dates.length + 1,
         itemBuilder: (_, i) {
-          // ── Item 0: “Lịch” chip (formerly Tất cả) ─────────────────
           if (i == 0) {
             final active = _selectedDate == null;
             return GestureDetector(
@@ -386,7 +444,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
-                        color: active ? Colors.white : const Color(0xFF5C6BC0),
+                        color:
+                            active ? Colors.white : const Color(0xFF5C6BC0),
                       ),
                     ),
                   ],
@@ -395,12 +454,11 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }
 
-          // ── Date chips (i = 1 … dates.length) ────────────
           final date = dates[i - 1];
-          final isToday = _isSameDay(date, today);
+          final isToday = isSameDay(date, today);
           final isSelected =
-              _selectedDate != null && _isSameDay(_selectedDate!, date);
-          final count = _taskCountFor(date);
+              _selectedDate != null && isSameDay(_selectedDate!, date);
+          final count = taskCountFor(date);
 
           return GestureDetector(
             onTap: () =>
@@ -413,15 +471,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: isSelected
                     ? const Color(0xFF5C6BC0)
                     : isToday
-                    ? const Color(0xFFE8EAFF)
-                    : Colors.white,
+                        ? const Color(0xFFE8EAFF)
+                        : Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: isSelected
                       ? const Color(0xFF5C6BC0)
                       : isToday
-                      ? const Color(0xFF5C6BC0)
-                      : const Color(0xFFDDE1FF),
+                          ? const Color(0xFF5C6BC0)
+                          : const Color(0xFFDDE1FF),
                   width: isToday && !isSelected ? 2 : 1.5,
                 ),
               ),
@@ -432,7 +490,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     formatDayShort(date),
                     style: TextStyle(
                       fontSize: 11,
-                      color: isSelected ? Colors.white : Colors.grey.shade600,
+                      color:
+                          isSelected ? Colors.white : Colors.grey.shade600,
                     ),
                   ),
                   Text(
@@ -443,6 +502,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: isSelected ? Colors.white : Colors.black87,
                     ),
                   ),
+                  if (count > 0)
+                    Container(
+                      width: 6,
+                      height: 6,
+                      margin: const EdgeInsets.only(top: 2),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? Colors.white.withValues(alpha: 0.8)
+                            : const Color(0xFF5C6BC0),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -461,98 +532,95 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5FF),
       appBar: _buildAppBar(),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          DashboardCard(
-            weeklyTotal: _weeklyTotal,
-            weeklyCompleted: _weeklyCompleted,
-            overdue: _overdueCount,
-          ),
-          FilterBar(
-            selectedFilter: _filterType,
-            onFilterChanged: (f) => setState(() => _filterType = f),
-          ),
-          // ── Date strip ──────────────────────────
-          _buildDateStrip(),
-          // ── Selected date header ──────────────────
-          if (hasDateFilter)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.filter_alt_rounded,
-                    size: 14,
-                    color: Color(0xFF5C6BC0),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Ngày ${formatDate(_selectedDate!)} · ${tasks.length} task',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF5C6BC0),
-                    ),
-                  ),
-                  const Spacer(),
-                  InkWell(
-                    onTap: () => setState(() => _selectedDate = null),
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE8EAFF),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.close_rounded,
-                            size: 12,
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(
+                color: Color(0xFF5C6BC0),
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DashboardCard(
+                  weeklyTotal: _weeklyTotal,
+                  weeklyCompleted: _weeklyCompleted,
+                  overdue: _overdueCount,
+                ),
+                FilterBar(
+                  selectedFilter: _filterType,
+                  onFilterChanged: (f) => setState(() => _filterType = f),
+                ),
+                _buildDateStrip(),
+                if (hasDateFilter)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.filter_alt_rounded,
+                            size: 14, color: Color(0xFF5C6BC0)),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Ngày ${formatDate(_selectedDate!)} · ${tasks.length} task',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                             color: Color(0xFF5C6BC0),
                           ),
-                          SizedBox(width: 3),
-                          Text(
-                            'Xóa bộ lọc',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF5C6BC0),
-                              fontWeight: FontWeight.w600,
+                        ),
+                        const Spacer(),
+                        InkWell(
+                          onTap: () => setState(() => _selectedDate = null),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE8EAFF),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.close_rounded,
+                                    size: 12, color: Color(0xFF5C6BC0)),
+                                SizedBox(width: 3),
+                                Text(
+                                  'Xóa bộ lọc',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF5C6BC0),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
+                Expanded(
+                  child: tasks.isEmpty
+                      ? EmptyState(
+                          isFiltered: _filterType != 'All' || hasDateFilter,
+                          onAdd: () => _showTaskBottomSheet(),
+                        )
+                      : ListView.builder(
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 4, 16, 100),
+                          itemCount: tasks.length,
+                          itemBuilder: (_, i) => TaskItem(
+                            key: ValueKey(tasks[i].id),
+                            task: tasks[i],
+                            onToggle: () => _toggleTaskStatus(tasks[i]),
+                            onEdit: () =>
+                                _showTaskBottomSheet(existingTask: tasks[i]),
+                            onDelete: () => _showDeleteDialog(tasks[i]),
+                          ),
+                        ),
+                ),
+              ],
             ),
-          Expanded(
-            child: tasks.isEmpty
-                ? EmptyState(
-                    isFiltered: _filterType != 'All' || hasDateFilter,
-                    onAdd: () => _showTaskBottomSheet(),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
-                    itemCount: tasks.length,
-                    itemBuilder: (_, i) => TaskItem(
-                      key: ValueKey(tasks[i].id),
-                      task: tasks[i],
-                      onToggle: () => _toggleTaskStatus(tasks[i].id),
-                      onEdit: () =>
-                          _showTaskBottomSheet(existingTask: tasks[i]),
-                      onDelete: () => _showDeleteDialog(tasks[i]),
-                    ),
-                  ),
-          ),
-        ],
-      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showTaskBottomSheet(),
         backgroundColor: const Color(0xFF5C6BC0),
@@ -592,6 +660,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       actions: [
+        // Sort button
         Builder(
           builder: (btnCtx) => Tooltip(
             message: 'Sắp xếp: ${_sortMode.label}',
@@ -599,13 +668,11 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => _showSortMenu(btnCtx),
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
+                margin:
+                    const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
+                  color: Colors.white.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -613,14 +680,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Icon(_sortMode.icon, size: 16, color: Colors.white),
                     const SizedBox(width: 4),
-                    const Text(
-                      'Sắp xếp',
-                      style: TextStyle(fontSize: 12, color: Colors.white),
-                    ),
+                    const Text('Sắp xếp',
+                        style: TextStyle(fontSize: 12, color: Colors.white)),
                   ],
                 ),
               ),
             ),
+          ),
+        ),
+        // Logout button
+        Tooltip(
+          message: 'Đăng xuất',
+          child: IconButton(
+            onPressed: _logout,
+            icon: const Icon(Icons.logout_rounded, color: Colors.white),
           ),
         ),
       ],
@@ -629,11 +702,10 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ═══════════════════════════════════════════════════════
-// TASK BOTTOM SHEET — StatefulWidget (safe lifecycle)
+// TASK BOTTOM SHEET
 // ═══════════════════════════════════════════════════════
 class _TaskSheetContent extends StatefulWidget {
   final Task? existingTask;
-
   const _TaskSheetContent({this.existingTask});
 
   @override
@@ -643,8 +715,8 @@ class _TaskSheetContent extends StatefulWidget {
 class _TaskSheetContentState extends State<_TaskSheetContent> {
   late final TextEditingController _ctrl;
   String? _error;
-  DateTime? _scheduledDate; // ngày dự định làm
-  DateTime? _dueDate; // deadline (≥ scheduledDate)
+  DateTime? _scheduledDate;
+  DateTime? _dueDate;
   int? _estimatedMinutes;
   TaskPriority _priority = TaskPriority.medium;
 
@@ -677,31 +749,39 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
       setState(() => _error = 'Tên task phải có ít nhất 2 ký tự!');
       return;
     }
+
+    // Giải thích (Tự động thiết lập ngày mặc định):
+    // Lấy ngày giờ hiện tại nhưng ép bỏ phần Giờ/Phút/Giây (chỉ giữ Ngày/Tháng/Năm)
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Dùng toán tử ?? (Null-coalescing) để kiểm tra:
+    // Nếu _scheduledDate hoặc _dueDate là null (do người dùng không chọn ngày),
+    // thì hệ thống tự động lấy giá trị mặc định là biến 'today' (ngày hôm nay).
+    final effectiveScheduledDate = _scheduledDate ?? today;
+    final effectiveDueDate = _dueDate ?? today;
+
     Navigator.of(context).pop(
       TaskFormResult(
         title: val,
-        scheduledDate: _scheduledDate,
-        dueDate: _dueDate,
+        scheduledDate: effectiveScheduledDate,
+        dueDate: effectiveDueDate,
         estimatedMinutes: _estimatedMinutes,
         priority: _priority,
       ),
     );
   }
 
-  // ── Pick scheduled date (ngày lên lịch) ───────────────────
-  // Cannot pick past dates. Clearing it also clears dueDate if before.
+
   Future<void> _pickScheduledDate() async {
     final today = DateTime(
-      DateTime.now().year,
-      DateTime.now().month,
-      DateTime.now().day,
-    );
+        DateTime.now().year, DateTime.now().month, DateTime.now().day);
     final picked = await showDatePicker(
       context: context,
       initialDate: _scheduledDate != null && !_scheduledDate!.isBefore(today)
           ? _scheduledDate!
           : today,
-      firstDate: today, // cannot schedule in the past
+      firstDate: today,
       lastDate: DateTime(DateTime.now().year + 5),
       helpText: 'Chọn ngày lên lịch',
       confirmText: 'Chọn',
@@ -719,32 +799,23 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
     if (picked != null) {
       setState(() {
         _scheduledDate = picked;
-        // Deadline must be ≥ scheduled date; clear it if conflict
-        if (_dueDate != null && _dueDate!.isBefore(picked)) {
-          _dueDate = null;
-        }
+        if (_dueDate != null && _dueDate!.isBefore(picked)) _dueDate = null;
       });
     }
   }
 
-  // ── Pick due date (deadline) ────────────────────────
-  // firstDate = scheduledDate (if set) or today. Never in the past.
   Future<void> _pickDate() async {
     final today = DateTime(
-      DateTime.now().year,
-      DateTime.now().month,
-      DateTime.now().day,
-    );
+        DateTime.now().year, DateTime.now().month, DateTime.now().day);
     final minDate = (_scheduledDate != null && !_scheduledDate!.isBefore(today))
         ? _scheduledDate!
         : today;
-    final initDate = (_dueDate != null && !_dueDate!.isBefore(minDate))
-        ? _dueDate!
-        : minDate;
+    final initDate =
+        (_dueDate != null && !_dueDate!.isBefore(minDate)) ? _dueDate! : minDate;
     final picked = await showDatePicker(
       context: context,
       initialDate: initDate,
-      firstDate: minDate, // cannot set deadline before scheduled date or today
+      firstDate: minDate,
       lastDate: DateTime(DateTime.now().year + 5),
       helpText: 'Chọn ngày hết hạn',
       confirmText: 'Chọn',
@@ -780,7 +851,6 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Handle bar
               Center(
                 child: Container(
                   width: 40,
@@ -792,8 +862,6 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                 ),
               ),
               const SizedBox(height: 20),
-
-              // ── Header ──────────────────────────
               Row(
                 children: [
                   Container(
@@ -826,9 +894,7 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                               ? 'Cập nhật thông tin công việc'
                               : 'Điền thông tin công việc',
                           style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade500,
-                          ),
+                              fontSize: 13, color: Colors.grey.shade500),
                         ),
                       ],
                     ),
@@ -837,11 +903,8 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
               ),
               const SizedBox(height: 24),
 
-              // ── Task title ───────────────────────
-              _SectionLabel(
-                label: 'Tên công việc',
-                icon: Icons.task_alt_rounded,
-              ),
+              // Task title
+              _SectionLabel(label: 'Tên công việc', icon: Icons.task_alt_rounded),
               const SizedBox(height: 8),
               TextField(
                 controller: _ctrl,
@@ -855,57 +918,47 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                 decoration: InputDecoration(
                   hintText: 'Ví dụ: Mua sắm đồ ăn...',
                   errorText: _error,
-                  prefixIcon: const Icon(
-                    Icons.task_alt_rounded,
-                    color: Color(0xFF5C6BC0),
-                  ),
+                  prefixIcon: const Icon(Icons.task_alt_rounded,
+                      color: Color(0xFF5C6BC0)),
                   filled: true,
                   fillColor: const Color(0xFFF3F4FF),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: Color(0xFFDDE1FF),
-                      width: 1.5,
-                    ),
+                    borderSide:
+                        const BorderSide(color: Color(0xFFDDE1FF), width: 1.5),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF5C6BC0),
-                      width: 2,
-                    ),
+                    borderSide:
+                        const BorderSide(color: Color(0xFF5C6BC0), width: 2),
                   ),
                   errorBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.red, width: 1.5),
+                    borderSide:
+                        const BorderSide(color: Colors.red, width: 1.5),
                   ),
                   focusedErrorBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: const BorderSide(color: Colors.red, width: 2),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
+                      horizontal: 16, vertical: 14),
                 ),
               ),
               const SizedBox(height: 20),
 
-              // ── Ngày lên lịch (Scheduled date) ────────────────
+              // Scheduled date
               _SectionLabel(
-                label: 'Ngày lên lịch',
-                icon: Icons.calendar_month_rounded,
-                optional: true,
-              ),
+                  label: 'Ngày lên lịch',
+                  icon: Icons.calendar_month_rounded,
+                  optional: true),
               const SizedBox(height: 8),
               InkWell(
                 onTap: _pickScheduledDate,
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
+                      horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF3F4FF),
                     borderRadius: BorderRadius.circular(12),
@@ -918,13 +971,11 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.calendar_month_rounded,
-                        size: 20,
-                        color: _scheduledDate != null
-                            ? const Color(0xFF5C6BC0)
-                            : Colors.grey.shade400,
-                      ),
+                      Icon(Icons.calendar_month_rounded,
+                          size: 20,
+                          color: _scheduledDate != null
+                              ? const Color(0xFF5C6BC0)
+                              : Colors.grey.shade400),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -941,12 +992,10 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                       ),
                       if (_scheduledDate != null)
                         GestureDetector(
-                          onTap: () => setState(() => _scheduledDate = null),
-                          child: Icon(
-                            Icons.close_rounded,
-                            size: 18,
-                            color: Colors.grey.shade500,
-                          ),
+                          onTap: () =>
+                              setState(() => _scheduledDate = null),
+                          child: Icon(Icons.close_rounded,
+                              size: 18, color: Colors.grey.shade500),
                         ),
                     ],
                   ),
@@ -956,26 +1005,24 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                 padding: const EdgeInsets.only(top: 5, left: 4),
                 child: Text(
                   'Ngày bạn dự định làm task này (không chọn ngày quá khứ)',
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                  style:
+                      TextStyle(fontSize: 11, color: Colors.grey.shade500),
                 ),
               ),
               const SizedBox(height: 18),
 
-              // ── Deadline (Due date) ──────────────────────
+              // Due date
               _SectionLabel(
-                label: 'Ngày hết hạn (Deadline)',
-                icon: Icons.event_rounded,
-                optional: true,
-              ),
+                  label: 'Ngày hết hạn (Deadline)',
+                  icon: Icons.event_rounded,
+                  optional: true),
               const SizedBox(height: 8),
               InkWell(
                 onTap: _pickDate,
                 borderRadius: BorderRadius.circular(12),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
+                      horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF3F4FF),
                     borderRadius: BorderRadius.circular(12),
@@ -988,13 +1035,11 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.calendar_today_rounded,
-                        size: 20,
-                        color: _dueDate != null
-                            ? const Color(0xFF5C6BC0)
-                            : Colors.grey.shade400,
-                      ),
+                      Icon(Icons.calendar_today_rounded,
+                          size: 20,
+                          color: _dueDate != null
+                              ? const Color(0xFF5C6BC0)
+                              : Colors.grey.shade400),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -1012,11 +1057,8 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                       if (_dueDate != null)
                         GestureDetector(
                           onTap: () => setState(() => _dueDate = null),
-                          child: Icon(
-                            Icons.close_rounded,
-                            size: 18,
-                            color: Colors.grey.shade500,
-                          ),
+                          child: Icon(Icons.close_rounded,
+                              size: 18, color: Colors.grey.shade500),
                         ),
                     ],
                   ),
@@ -1024,12 +1066,11 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
               ),
               const SizedBox(height: 20),
 
-              // ── Duration ─────────────────────────
+              // Duration chips
               _SectionLabel(
-                label: 'Thời gian ước tính',
-                icon: Icons.timer_outlined,
-                optional: true,
-              ),
+                  label: 'Thời gian ước tính',
+                  icon: Icons.timer_outlined,
+                  optional: true),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -1038,14 +1079,11 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                   final selected = _estimatedMinutes == min;
                   return GestureDetector(
                     onTap: () => setState(
-                      () => _estimatedMinutes = selected ? null : min,
-                    ),
+                        () => _estimatedMinutes = selected ? null : min),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 7,
-                      ),
+                          horizontal: 12, vertical: 7),
                       decoration: BoxDecoration(
                         color: selected
                             ? const Color(0xFF5C6BC0)
@@ -1061,13 +1099,11 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
-                            Icons.timer_outlined,
-                            size: 14,
-                            color: selected
-                                ? Colors.white
-                                : Colors.grey.shade600,
-                          ),
+                          Icon(Icons.timer_outlined,
+                              size: 14,
+                              color: selected
+                                  ? Colors.white
+                                  : Colors.grey.shade600),
                           const SizedBox(width: 5),
                           Text(
                             formatDuration(min),
@@ -1087,8 +1123,9 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
               ),
               const SizedBox(height: 20),
 
-              // ── Priority ─────────────────────────
-              _SectionLabel(label: 'Mức độ ưu tiên', icon: Icons.flag_rounded),
+              // Priority
+              _SectionLabel(
+                  label: 'Mức độ ưu tiên', icon: Icons.flag_rounded),
               const SizedBox(height: 8),
               Row(
                 children: TaskPriority.values.map((p) {
@@ -1100,31 +1137,31 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                         onTap: () => setState(() => _priority = p),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
                             color: selected ? p.color : p.bgColor,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: selected
                                   ? p.color
-                                  : p.color.withOpacity(0.3),
+                                  : p.color.withValues(alpha: 0.3),
                               width: 1.5,
                             ),
                           ),
                           child: Column(
                             children: [
-                              Icon(
-                                p.icon,
-                                size: 18,
-                                color: selected ? Colors.white : p.color,
-                              ),
+                              Icon(p.icon,
+                                  size: 18,
+                                  color: selected ? Colors.white : p.color),
                               const SizedBox(height: 3),
                               Text(
                                 p.label,
                                 style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
-                                  color: selected ? Colors.white : p.color,
+                                  color:
+                                      selected ? Colors.white : p.color,
                                 ),
                               ),
                             ],
@@ -1137,23 +1174,21 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
               ),
               const SizedBox(height: 24),
 
-              // ── Buttons ──────────────────────────
+              // Buttons
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () => Navigator.of(context).pop(),
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 14),
                         side: const BorderSide(color: Color(0xFF5C6BC0)),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                            borderRadius: BorderRadius.circular(12)),
                       ),
-                      child: const Text(
-                        'Hủy',
-                        style: TextStyle(color: Color(0xFF5C6BC0)),
-                      ),
+                      child: const Text('Hủy',
+                          style: TextStyle(color: Color(0xFF5C6BC0))),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1163,17 +1198,15 @@ class _TaskSheetContentState extends State<_TaskSheetContent> {
                       onPressed: _submit,
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF5C6BC0),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                       child: Text(
                         isEditing ? 'Cập nhật' : 'Thêm Task',
                         style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
+                            fontSize: 15, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),

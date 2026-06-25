@@ -1,12 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 
-void main() {
-  runApp(const MyApp());
+// ═══════════════════════════════════════════════════════
+// ENTRY POINT
+// – Checks SharedPreferences for isLoggedIn flag
+// – Auto-login: jumps directly to HomeScreen if true
+// ═══════════════════════════════════════════════════════
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Read session flag before rendering first frame
+  final prefs = await SharedPreferences.getInstance();
+  final bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+
+  runApp(MyApp(isLoggedIn: isLoggedIn));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final bool isLoggedIn;
+  const MyApp({super.key, required this.isLoggedIn});
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +35,8 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         fontFamily: 'Roboto',
       ),
-      home: const HomeScreen(),
+      // Auto-login: if already logged in, skip LoginScreen
+      home: isLoggedIn ? const HomeScreen() : const LoginScreen(),
     );
   }
 }

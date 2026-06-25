@@ -36,17 +36,17 @@ class TaskItem extends StatelessWidget {
             color: overdue
                 ? Colors.red.shade200
                 : done
-                    ? const Color(0xFF81C784).withOpacity(0.6)
+                    ? const Color(0xFF81C784).withValues(alpha: 0.6)
                     : const Color(0xFFDDE1FF),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
               color: overdue
-                  ? Colors.red.withOpacity(0.08)
+                  ? Colors.red.withValues(alpha: 0.08)
                   : done
-                      ? const Color(0xFF81C784).withOpacity(0.12)
-                      : const Color(0xFF5C6BC0).withOpacity(0.07),
+                      ? const Color(0xFF81C784).withValues(alpha: 0.12)
+                      : const Color(0xFF5C6BC0).withValues(alpha: 0.07),
               blurRadius: 10,
               offset: const Offset(0, 3),
             ),
@@ -152,7 +152,7 @@ class TaskItem extends StatelessWidget {
                                 horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
                               color:
-                                  const Color(0xFFA5D6A7).withOpacity(0.3),
+                                  const Color(0xFFA5D6A7).withValues(alpha: 0.3),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: const Text(
